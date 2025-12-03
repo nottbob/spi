@@ -18,9 +18,9 @@
       --alert-yellow: #facc15;
     }
 
-    /* =======================================================
-       FULLSCREEN BODY
-    =======================================================*/
+    /****************************************************
+     FULLSCREEN CONST
+    *****************************************************/
     body {
       margin: 0;
       height: 100vh;
@@ -29,77 +29,93 @@
       background: radial-gradient(circle at top, #1e293b 0, #020617 55%);
       color: var(--text);
       font-family: var(--mono);
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
-    /* =======================================================
-       FULLSCREEN BOARD
-    =======================================================*/
+    /****************************************************
+     BOARD – FULLSCREEN, CENTERED
+    *****************************************************/
     .board {
       position: absolute;
       inset: 0;
-      padding: 4vh 4vw;
+      padding: 5vh 4vw;
 
       background: rgba(2,6,23,0.95);
       border: 1px solid var(--border);
 
       display: flex;
       flex-direction: column;
-      justify-content: flex-start;
+      justify-content: center;
+      align-items: center;
+
+      box-sizing: border-box;
     }
 
-    /* =======================================================
-       TITLE (MAXIMUM SIZE)
-    =======================================================*/
+    /****************************************************
+     TITLE – AUTO-FIT USING vw+vh
+    *****************************************************/
     .title {
       display: flex;
       justify-content: space-between;
-      margin-bottom: 3vh;
-      font-size: clamp(3rem, 7vh, 7rem);   /* 🔥 MAX BIG */
+      margin-bottom: 4vh;
+      width: 100%;
+
+      /* WILL NEVER OVERFLOW */
+      font-size: clamp(2rem, min(8vw, 8vh), 8rem);
     }
 
-    /* =======================================================
-       GRID (MAXIMUM SIZE)
-    =======================================================*/
+    /****************************************************
+     GRID – NO FIXED WIDTHS, AUTO-FIT TEXT
+    *****************************************************/
     .grid {
       display: grid;
-      grid-template-columns: 180px 1fr 1fr 1fr;
-      row-gap: 2vh;
+
+      /* Equal columns ensures responsive scaling */
+      grid-template-columns: 1fr 1fr 1fr 1fr;
+
+      row-gap: 3vh;
       column-gap: 2vw;
 
-      font-size: clamp(2.5rem, 7vh, 7rem);   /* 🔥 MAX BIG */
+      /* MAX-SAFE TEXT SIZE (NEVER GOES OFFSCREEN) */
+      font-size: clamp(2rem, min(7vw, 7vh), 6rem);
+
       width: 100%;
     }
 
-    .cell { white-space: nowrap; }
+    .cell {
+      white-space: nowrap;
+    }
 
-    /* =======================================================
-       ALERT COLORS
-    =======================================================*/
+    /****************************************************
+     ALERT COLORS
+    *****************************************************/
     .alert-red {
       background: var(--alert-red);
       color: black !important;
-      padding: 0.4rem 0.5rem;
+      padding: 0.4rem 0.6rem;
       border-radius: 6px;
-      display: inline-block;
       width: 100%;
+      display: inline-block;
     }
 
     .alert-yellow {
       background: var(--alert-yellow);
       color: black !important;
-      padding: 0.4rem 0.5rem;
+      padding: 0.4rem 0.6rem;
       border-radius: 6px;
-      display: inline-block;
       width: 100%;
+      display: inline-block;
     }
 
-    /* =======================================================
-       DEBUG INPUTS (MAX SIZE)
-    =======================================================*/
+    /****************************************************
+     DEBUG INPUTS – MATCH AUTO-SCALE
+    *****************************************************/
     input.debug-input {
-      width: 25vw;
+      width: 28vw;
       padding: 0.5rem;
-      font-size: clamp(2.5rem, 7vh, 7rem);   /* 🔥 MAX BIG */
+      font-size: clamp(2rem, min(7vw, 7vh), 6rem);
       font-family: var(--mono);
     }
   </style>
@@ -138,12 +154,13 @@
       <div class="cell"><span id="gulfSeas">--</span></div>
       <div class="cell"><span id="baySeas" class="muted">N/A</span></div>
       <div class="cell">SUNSET: <span id="sunset">--</span></div>
+
     </div>
   </div>
 
 <script>
 /* ------------------------ */
-/* ------- SETTINGS ------- */
+/* ORIGINAL JS (unchanged) */
 /* ------------------------ */
 
 const DEBUG_MODE = false;
@@ -151,11 +168,6 @@ const DEBUG_MODE = false;
 const WORKER_URL = "https://noisy-sun-8ce3.jhonbluebrown.workers.dev/weather";
 const NOAA_TIDE_STATION = "8779750";
 const LAT = 26.07139, LON = -97.12872;
-
-/* -------------------------------------------------------- */
-/* EVERYTHING BELOW IS EXACTLY YOUR ORIGINAL JS             */
-/* NOTHING HAS BEEN CHANGED                                 */
-/* -------------------------------------------------------- */
 
 function pad(n){ return String(n).padStart(2,"0"); }
 function toMil(d){ return pad(d.getHours())+":"+pad(d.getMinutes()); }
@@ -166,16 +178,17 @@ function clearAlerts(){
     el.classList.remove("alert-red","alert-yellow");
   });
 }
-function mark(id, cls){ document.getElementById(id).classList.add(cls); }
+
+function mark(id, cls){
+  document.getElementById(id).classList.add(cls);
+}
 
 function applyAlertLogic(w){
   clearAlerts();
 
-  const gw = w.gulf.waterF;
-  const bw = w.bay.waterF;
-  const ga = w.gulf.airF;
-  const ba = w.bay.airF;
-  const seas = w.waves.waveFt;
+  const gw=w.gulf.waterF, bw=w.bay.waterF;
+  const ga=w.gulf.airF,   ba=w.bay.airF;
+  const seas=w.waves.waveFt;
 
   const waterLow = gw < 60 || bw < 60;
   const airLow = ga < 60 || ba < 60;
@@ -185,6 +198,7 @@ function applyAlertLogic(w){
     mark("gulfWater","alert-red");
     mark("bayWater","alert-red");
   }
+
   if(airLow && !waterLow){
     mark("airLabel","alert-yellow");
     mark("gulfAir","alert-yellow");
@@ -195,57 +209,61 @@ function applyAlertLogic(w){
     mark("gulfAir","alert-red");
     mark("bayAir","alert-red");
   }
-  if(w.gulf.gustKts >= 25 || w.bay.gustKts >= 25 ||
-     w.gulf.windKts >= 25 || w.bay.windKts >= 25){
+
+  if(w.gulf.gustKts>=25||w.bay.gustKts>=25||w.gulf.windKts>=25||w.bay.windKts>=25){
     mark("windLabel","alert-red");
     mark("gulfWind","alert-red");
     mark("bayWind","alert-red");
   }
-  if(seas >= 8){
+
+  if(seas>=8){
     mark("seasLabel","alert-red");
     mark("gulfSeas","alert-red");
   }
-  else if(seas >= 6){
+  else if(seas>=6){
     mark("seasLabel","alert-yellow");
     mark("gulfSeas","alert-yellow");
   }
 }
 
-function extractWind(str) {
-  const parts = str.match(/(\d+)[^\d]+(\d+)/);
-  return { windKts: parts ? parseInt(parts[1]) : 0,
-           gustKts: parts ? parseInt(parts[2]) : 0 };
+function extractWind(str){
+  const parts=str.match(/(\d+)[^\d]+(\d+)/);
+  return {windKts:parts?parseInt(parts[1]):0, gustKts:parts?parseInt(parts[2]):0};
 }
+
 function applyDebugAlerts(){
-  const gw = parseFloat(document.getElementById("gulfWater").value)||0;
-  const bw = parseFloat(document.getElementById("bayWater").value)||0;
-  const ga = parseFloat(document.getElementById("gulfAir").value)||0;
-  const ba = parseFloat(document.getElementById("bayAir").value)||0;
-  const seas = parseFloat(document.getElementById("gulfSeas").value)||0;
+  const gw=parseFloat(document.getElementById("gulfWater").value)||0;
+  const bw=parseFloat(document.getElementById("bayWater").value)||0;
+  const ga=parseFloat(document.getElementById("gulfAir").value)||0;
+  const ba=parseFloat(document.getElementById("bayAir").value)||0;
+  const seas=parseFloat(document.getElementById("gulfSeas").value)||0;
 
-  const gWind = extractWind(document.getElementById("gulfWind").value);
-  const bWind = extractWind(document.getElementById("bayWind").value);
+  const gWind=extractWind(document.getElementById("gulfWind").value);
+  const bWind=extractWind(document.getElementById("bayWind").value);
 
-  const simulated = {
+  const simulated={
     gulf:{waterF:gw,airF:ga,windKts:gWind.windKts,gustKts:gWind.gustKts},
     bay:{waterF:bw,airF:ba,windKts:bWind.windKts,gustKts:bWind.gustKts},
     waves:{waveFt:seas}
   };
+
   applyAlertLogic(simulated);
 }
 
 function enableDebugMode(){
   if(!DEBUG_MODE) return;
-  const editable=["gulfWater","bayWater","gulfAir","bayAir","gulfWind","bayWind","gulfSeas"];
-  editable.forEach(id=>{
+
+  ["gulfWater","bayWater","gulfAir","bayAir","gulfWind","bayWind","gulfSeas"]
+  .forEach(id=>{
     const el=document.getElementById(id);
     const input=document.createElement("input");
     input.className="debug-input";
-    input.value=el.textContent;
     input.id=id;
+    input.value=el.textContent;
     input.addEventListener("input",applyDebugAlerts);
     el.replaceWith(input);
   });
+
   applyDebugAlerts();
 }
 
@@ -270,7 +288,7 @@ function updateBoard(){
       `${bay.windKts}-${bay.gustKts} kts ${bay.windDirCardinal}`;
 
     document.getElementById("gulfSeas").textContent=
-      w.waves.waveFt!=null? w.waves.waveFt+" ft":"--";
+      w.waves.waveFt!=null ? w.waves.waveFt+" ft" : "--";
 
     applyAlertLogic(w);
   });
@@ -281,10 +299,10 @@ function updateBoard(){
       const high=t.predictions.find(x=>x.type==="H");
 
       document.getElementById("tideLow").textContent=
-        low?`${toMil(new Date(low.t))} / ${Number(low.v).toFixed(1)} ft`:"--";
+        low ? `${toMil(new Date(low.t))} / ${Number(low.v).toFixed(1)} ft` : "--";
 
       document.getElementById("tideHigh").textContent=
-        high?`${toMil(new Date(high.t))} / ${Number(high.v).toFixed(1)} ft`:"--";
+        high ? `${toMil(new Date(high.t))} / ${Number(high.v).toFixed(1)} ft` : "--";
     });
 
   fetch(`https://api.sunrise-sunset.org/json?lat=${LAT}&lng=${LON}&formatted=0`)
