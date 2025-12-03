@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SPI Marine Board</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #020617;
+      --panel: #020617;
+      --text: #e5e7eb;
+      --dim: #9ca3af;
+      --accent: #38bdf8;
+      --border: #1f2937;
+      --error: #f97373;
+      --mono: "SF Mono", Menlo, Monaco, Consolas, monospace;
+      --alert-red: #7f1d1d;
+      --alert-yellow: #facc15;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top, #1e293b 0, #020617 55%);
+      color: var(--text);
+      font-family: var(--mono);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+
+    .board {
+      background: rgba(2,6,23,0.95);
+      border-radius: 1rem;
+      border: 1px solid var(--border);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.65);
+      padding: 1.5rem 2rem;
+      width: 100%;
+      max-width: 900px;
+    }
+
+    .title {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 120px 1fr 1fr 1fr;
+      row-gap: 0.35rem;
+      column-gap: 0.35rem;
+      font-size: clamp(0.75rem, 2vw, 1.1rem);
+    }
+
+    .cell { white-space: nowrap; }
+
+    .alert-red {
+      background: var(--alert-red);
+      color: black !important;
+      padding: 0.2rem 0.3rem;
+      border-radius: 4px;
+      display: inline-block;
+      width: 100%;
+    }
+
+    .alert-yellow {
+      background: var(--alert-yellow);
+      color: black !important;
+      padding: 0.2rem 0.3rem;
+      border-radius: 4px;
+      display: inline-block;
+      width: 100%;
+    }
+
+    input.debug-input {
+      width: 90px;
+      padding: 2px;
+      font-size: 0.9rem;
+      font-family: var(--mono);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="board">
+    <div class="title">
+      <div class="title-main">WEATHER</div>
+      <div class="title-sub" id="updatedAt">LOADING…</div>
+    </div>
+
+    <div class="grid">
+
+      <!-- Header -->
+      <div class="cell"></div>
+      <div class="cell">GULF</div>
+      <div class="cell">BAY</div>
+      <div class="cell">TIDES: <span id="tideDate"></span></div>
+
+      <!-- WATER -->
+      <div class="cell"><span id="waterLabel">WATER</span></div>
+      <div class="cell"><span id="gulfWater">--</span></div>
+      <div class="cell"><span id="bayWater">--</span></div>
+      <div class="cell">LOW: <span id="tideLow">--</span></div>
+
+      <!-- AIR -->
+      <div class="cell"><span id="airLabel">AIR</span></div>
+      <div class="cell"><span id="gulfAir">--</span></div>
+      <div class="cell"><span id="bayAir">--</span></div>
+      <div class="cell">HIGH: <span id="tideHigh">--</span></div>
+
+      <!-- WINDS -->
+      <div class="cell"><span id="windLabel">WINDS</span></div>
+      <div class="cell"><span id="gulfWind">--</span></div>
+      <div class="cell"><span id="bayWind">--</span></div>
+      <div class="cell">SUNRISE: <span id="sunrise">--</span></div>
+
+      <!-- SEAS -->
+      <div class="cell"><span id="seasLabel">SEAS</span></div>
+      <div class="cell"><span id="gulfSeas">--</span></div>
+      <div class="cell"><span id="baySeas" class="muted">N/A</span></div>
+      <div class="cell">SUNSET: <span id="sunset">--</span></div>
+
+    </div>
+  </div>
+
+<script>
+/* ------------------------ */
+/* ------- SETTINGS ------- */
+/* ------------------------ */
+
+const DEBUG_MODE = false;   // <---- manually toggle here
+
+const WORKER_URL = "https://noisy-sun-8ce3.jhonbluebrown.workers.dev/weather";
+const NOAA_TIDE_STATION = "8779750";
+const LAT = 26.07139, LON = -97.12872;
+
+/* ------------------------ */
+/* ---- UTIL FUNCTIONS ---- */
+/* ------------------------ */
+
+function pad(n){ return String(n).padStart(2,"0"); }
+function toMil(d){ return pad(d.getHours())+":"+pad(d.getMinutes()); }
+function toMilSec(d){ return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds()); }
+
+function clearAlerts(){
+  document.querySelectorAll('.alert-red, .alert-yellow').forEach(el=>{
+    el.classList.remove("alert-red","alert-yellow");
+  });
+}
+
+function mark(id, cls){
+  document.getElementById(id).classList.add(cls);
+}
+
+/* -------------------------------------- */
+/* ---- ALERT LOGIC (shared by modes) --- */
+/* -------------------------------------- */
+
+function applyAlertLogic(w){
+  clearAlerts();
+
+  const gw = w.gulf.waterF;
+  const bw = w.bay.waterF;
+  const ga = w.gulf.airF;
+  const ba = w.bay.airF;
+  const seas = w.waves.waveFt;
+
+  const waterLow = gw < 60 || bw < 60;
+  const airLow = ga < 60 || ba < 60;
+
+  // WATER
+  if(waterLow){
+    mark("waterLabel","alert-red");
+    mark("gulfWater","alert-red");
+    mark("bayWater","alert-red");
+  }
+
+  // AIR
+  if(airLow && !waterLow){
+    mark("airLabel","alert-yellow");
+    mark("gulfAir","alert-yellow");
+    mark("bayAir","alert-yellow");
+  }
+  if(airLow && waterLow){
+    mark("airLabel","alert-red");
+    mark("gulfAir","alert-red");
+    mark("bayAir","alert-red");
+  }
+
+  // WINDS
+  if(w.gulf.gustKts >= 25 || w.bay.gustKts >= 25 ||
+     w.gulf.windKts >= 25 || w.bay.windKts >= 25){
+    mark("windLabel","alert-red");
+    mark("gulfWind","alert-red");
+    mark("bayWind","alert-red");
+  }
+
+  // SEAS
+  if(seas >= 8){
+    mark("seasLabel","alert-red");
+    mark("gulfSeas","alert-red");
+  }
+  else if(seas >= 6){
+    mark("seasLabel","alert-yellow");
+    mark("gulfSeas","alert-yellow");
+  }
+}
+
+/* -------------------------------------------------- */
+/* ---- DEBUG MODE ALERT SYSTEM (read inputs) ------- */
+/* -------------------------------------------------- */
+
+function extractWind(str) {
+  const parts = str.match(/(\d+)[^\d]+(\d+)/);
+  return {
+    windKts: parts ? parseInt(parts[1]) : 0,
+    gustKts: parts ? parseInt(parts[2]) : 0,
+    windDirCardinal: ""
+  };
+}
+
+function applyDebugAlerts() {
+  const gw = parseFloat(document.getElementById("gulfWater").value) || 0;
+  const bw = parseFloat(document.getElementById("bayWater").value) || 0;
+  const ga = parseFloat(document.getElementById("gulfAir").value) || 0;
+  const ba = parseFloat(document.getElementById("bayAir").value) || 0;
+  const seas = parseFloat(document.getElementById("gulfSeas").value) || 0;
+
+  const gWind = extractWind(document.getElementById("gulfWind").value);
+  const bWind = extractWind(document.getElementById("bayWind").value);
+
+  const simulated = {
+    gulf: {
+      waterF: gw,
+      airF: ga,
+      windKts: gWind.windKts,
+      gustKts: gWind.gustKts
+    },
+    bay: {
+      waterF: bw,
+      airF: ba,
+      windKts: bWind.windKts,
+      gustKts: bWind.gustKts
+    },
+    waves: {
+      waveFt: seas
+    }
+  };
+
+  applyAlertLogic(simulated);
+}
+
+/* ---------------------------------- */
+/* ---- DEBUG MODE ENABLE LOGIC ----- */
+/* ---------------------------------- */
+
+function enableDebugMode() {
+  if (!DEBUG_MODE) return;
+
+  console.log("DEBUG MODE ENABLED — Auto-refresh disabled");
+
+  const editable = [
+    "gulfWater","bayWater",
+    "gulfAir","bayAir",
+    "gulfWind","bayWind",
+    "gulfSeas"
+  ];
+
+  editable.forEach(id => {
+    const el = document.getElementById(id);
+    const val = el.textContent;
+
+    const input = document.createElement("input");
+    input.className = "debug-input";
+    input.value = val;
+
+    input.addEventListener("input", () => {
+      applyDebugAlerts();
+    });
+
+    el.replaceWith(input);
+    input.id = id;
+  });
+
+  applyDebugAlerts();
+}
+
+/* --------------------------- */
+/* ---- NORMAL UPDATE FLOW --- */
+/* --------------------------- */
+
+function updateBoard(){
+  if (DEBUG_MODE) {
+    document.getElementById("updatedAt").textContent = "DEBUG MODE (Manual Edit)";
+    enableDebugMode();
+    return;
+  }
+
+  fetch(WORKER_URL).then(r=>r.json()).then(w=>{
+    gulf = w.gulf;
+    bay = w.bay;
+
+    document.getElementById("gulfWater").textContent = gulf.waterF+"°F";
+    document.getElementById("bayWater").textContent  = bay.waterF +"°F";
+    document.getElementById("gulfAir").textContent   = gulf.airF +"°F";
+    document.getElementById("bayAir").textContent    = bay.airF  +"°F";
+
+    document.getElementById("gulfWind").textContent =
+      `${gulf.windKts}-${gulf.gustKts} kts ${gulf.windDirCardinal}`;
+    document.getElementById("bayWind").textContent =
+      `${bay.windKts}-${bay.gustKts} kts ${bay.windDirCardinal}`;
+
+    document.getElementById("gulfSeas").textContent =
+      w.waves.waveFt != null ? w.waves.waveFt+" ft" : "--";
+
+    applyAlertLogic(w);
+  });
+
+  fetch(`https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&station=${NOAA_TIDE_STATION}&date=today&interval=hilo&units=english&time_zone=lst_ldt&datum=MLLW&format=json`)
+    .then(r=>r.json()).then(t=>{
+      const low = t.predictions.find(x=>x.type==="L");
+      const high = t.predictions.find(x=>x.type==="H");
+
+      document.getElementById("tideLow").textContent =
+        low ? `${toMil(new Date(low.t))} / ${Number(low.v).toFixed(1)} ft` : "--";
+
+      document.getElementById("tideHigh").textContent =
+        high ? `${toMil(new Date(high.t))} / ${Number(high.v).toFixed(1)} ft` : "--";
+    });
+
+  fetch(`https://api.sunrise-sunset.org/json?lat=${LAT}&lng=${LON}&formatted=0`)
+    .then(r=>r.json()).then(s=>{
+      document.getElementById("sunrise").textContent = toMil(new Date(s.results.sunrise));
+      document.getElementById("sunset").textContent  = toMil(new Date(s.results.sunset));
+    });
+
+  const now = new Date();
+  document.getElementById("updatedAt").textContent = "UPDATED "+toMilSec(now)+" LCL";
+  document.getElementById("tideDate").textContent =
+    pad(now.getDate())+" " + ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][now.getMonth()];
+}
+
+/* ------------------------- */
+/* ---- INIT --------------- */
+/* ------------------------- */
+
+updateBoard();
+
+if (!DEBUG_MODE) {
+  setInterval(updateBoard,60000);
+
+  setInterval(()=>{
+    const now = new Date();
+    document.getElementById("updatedAt").textContent = "UPDATED "+toMilSec(now)+" LCL";
+  },1000);
+}
+</script>
+
+</body>
+</html>
