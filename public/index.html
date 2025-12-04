@@ -208,30 +208,38 @@ function renderLiveWeather(w){
 /* OFFLINE DISPLAY */
 function applyOfflineDisplay(){
   const cached = localStorage.getItem("lastWeather");
+  const cachedTime = localStorage.getItem("lastWeatherTime");
 
   if(!cached){
-    updatedAt.textContent="OFFLINE";
-    updatedAt.style.color="#facc15";
+    updatedAt.textContent = "OFFLINE — NO CACHED DATA";
+    updatedAt.style.color = "#facc15";
     return;
   }
 
   const w = JSON.parse(cached);
 
-  gulfWater.textContent=w.gulf.waterF+"°F";
-  bayWater.textContent=w.bay.waterF+"°F";
-  gulfAir.textContent=w.gulf.airF+"°F";
-  bayAir.textContent=w.bay.airF+"°F";
+  // Render cached values
+  gulfWater.textContent = w.gulf.waterF + "°F";
+  bayWater.textContent  = w.bay.waterF + "°F";
+  gulfAir.textContent   = w.gulf.airF + "°F";
+  bayAir.textContent    = w.bay.airF + "°F";
 
-  gulfWind.textContent=`${w.gulf.windKts}-${w.gulf.gustKts} kts ${w.gulf.windDirCardinal}`;
-  bayWind.textContent=`${w.bay.windKts}-${w.bay.gustKts} kts ${w.bay.windDirCardinal}`;
+  gulfWind.textContent  = `${w.gulf.windKts}-${w.gulf.gustKts} kts ${w.gulf.windDirCardinal}`;
+  bayWind.textContent   = `${w.bay.windKts}-${w.bay.gustKts} kts ${w.bay.windDirCardinal}`;
 
-  gulfSeas.textContent=w.waves.waveFt!=null ? w.waves.waveFt+" ft" : "--";
+  gulfSeas.textContent  = w.waves.waveFt != null ? w.waves.waveFt + " ft" : "--";
 
   applyAlertLogic(w);
 
-  updatedAt.style.color="#facc15";
-  updatedAt.textContent = "OFFLINE";
+  updatedAt.style.color = "#facc15";
+
+  if (cachedTime) {
+    updatedAt.textContent = `OFFLINE — Last Live: ${cachedTime}`;
+  } else {
+    updatedAt.textContent = "OFFLINE — (no timestamp)";
+  }
 }
+
 
 /* MAIN UPDATE */
 function updateBoard(){
@@ -243,8 +251,10 @@ function updateBoard(){
       offlineMode = false;
       offlineTime = null;
 
-      lastLiveUpdate = new Date();
-      localStorage.setItem("lastWeather", JSON.stringify(data));
+lastLiveUpdate = new Date();
+localStorage.setItem("lastWeather", JSON.stringify(data));
+localStorage.setItem("lastWeatherTime", toHM(lastLiveUpdate));
+
 
       renderLiveWeather(data);
     })
