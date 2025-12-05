@@ -1,150 +1,133 @@
-// ======================================================================
-// SPI WEATHER — Buoys + Stormglass Waves + NOAA SPA Sun + NOAA Tides
-// ======================================================================
+import fetch from "node-fetch";
+import pdf from "pdf-parse-es5";
+import { getStore } from "@netlify/blobs";
 
-// No imports needed — Netlify includes fetch + fs works in /tmp
-import fs from "fs";
-
-// ---------- CONFIG ----------
-const STORMGLASS_KEY =
-  "190fede0-cfd3-11f0-b4de-0242ac130003-190fee6c-cfd3-11f0-b4de-0242ac130003";
+// ------------------------ CONFIG ------------------------
+const STORMGLASS_KEY = "190fede0-cfd3-11f0-b4de-0242ac130003-190fee6c-cfd3-11f0-b4de-0242ac130003";
 
 const WAVES_LAT = 26.071389;
 const WAVES_LON = -97.128722;
 
-// SPI tide station coordinates
-const SUN_LAT = 26.07139;
-const SUN_LON = -97.12872;
+const store = getStore("wave-cache");   // persistent Netlify blob store
 
-// Cache stored in ephemeral function memory
-const CACHE_PATH = "/tmp/stormglass_cache.json";
 
-export async function handler(event) {
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: cors() };
-  }
-
+// ------------------------ MAIN HANDLER ------------------------
+export const handler = async () => {
   try {
-    // ----- BUOYS -----
-    const gulf = await safeBuoy("BZST2");
-    const bay  = await safeBuoy("PCGT2");
 
-    // ----- WAVES (Stormglass 48h, cached 12h) -----
-    const waves = await getStormglassWaves();
+    // Waves with 12 hr cache
+    const waves = await getWavesCached();
 
-    // ----- SUNRISE/SUNSET -----
-    const sun = computeSunriseSunset(SUN_LAT, SUN_LON, new Date());
+    // Buoys
+    const gulf = await safeFetchBuoy("BZST2");
+    const bay  = await safeFetchBuoy("PCGT2");
 
-    // ----- TIDES -----
-    const tides = await safeTides();
+    // Tides + Sunrise/Sunset from USHarbors PDF
+    const tideSun = await safeFetchUsharbors();
 
-    return json({ gulf, bay, waves, sun, tides });
+    return {
+      statusCode: 200,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        gulf,
+        bay,
+        waves,
+        tides: tideSun.tides,
+        sun: tideSun.sun
+      })
+    };
 
   } catch (err) {
-    return json({
-      error: String(err),
-      gulf: null,
-      bay: null,
-      waves: { waveM: null, waveFt: null },
-      sun: { sunrise: null, sunset: null },
-      tides: { low: null, high: null }
-    }, 500);
-  }
-}
-
-// ======================================================================
-// HELPERS
-// ======================================================================
-function cors() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
-  };
-}
-
-function json(obj, status = 200) {
-  return {
-    statusCode: status,
-    headers: { ...cors(), "Content-Type": "application/json" },
-    body: JSON.stringify(obj)
-  };
-}
-
-const oneDec = n => (n == null ? null : Number(n.toFixed(1)));
-const CtoF = c => (c * 9) / 5 + 32;
-const mpsToKts = v => v * 1.94384;
-
-// ======================================================================
-// BUOYS — Safe Wrapper
-// ======================================================================
-async function safeBuoy(id) {
-  try { return await fetchBuoy(id); }
-  catch {
     return {
-      airF: null, waterF: null,
-      windKts: null, gustKts: null,
-      windDirCardinal: "--"
+      statusCode: 500,
+      body: JSON.stringify({
+        error: String(err),
+        gulf: null,
+        bay: null,
+        waves: { waveFt: null, waveM: null },
+        tides: { low: [], high: [] },
+        sun: { sunrise: null, sunset: null }
+      })
+    };
+  }
+};
+
+
+// ======================================================================
+//  SAFE WRAPPERS
+// ======================================================================
+async function safeFetchBuoy(id) {
+  try { return await fetchBuoy(id); }
+  catch { return { airF:null, waterF:null, windKts:null, gustKts:null, windDirCardinal:"--" }; }
+}
+
+async function safeFetchUsharbors() {
+  try { return await fetchUsharborsTidesSun(); }
+  catch (e) {
+    return {
+      tides: { high: [], low: [] },
+      sun: { sunrise: null, sunset: null }
     };
   }
 }
 
+
+// ======================================================================
+//  BUOY FETCH
+// ======================================================================
 async function fetchBuoy(id) {
-  const r = await fetch(`https://www.ndbc.noaa.gov/data/realtime2/${id}.txt`);
-  const text = await r.text();
+  const url = `https://www.ndbc.noaa.gov/data/realtime2/${id}.txt`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error("Buoy fetch failed");
 
-  const lines = text.split(/\r?\n/).filter(x => x.trim());
+  const text = await resp.text();
 
-  // Parse header
-  const headerLine = lines.find(l => l.startsWith("#") && l.includes("WDIR"));
-  const header = headerLine.replace("#","").trim().split(/\s+/);
+  const lines = text.split(/\r?\n/)
+    .filter(x => x.trim() && !x.startsWith("#"));
 
-  const colIndex = name => header.indexOf(name);
+  if (!lines.length) throw new Error("No buoy rows");
 
-  const idx = {
-    WDIR: colIndex("WDIR"),
-    WSPD: colIndex("WSPD"),
-    GST:  colIndex("GST"),
-    ATMP: colIndex("ATMP"),
-    WTMP: colIndex("WTMP")
-  };
+  const rows = lines.map(line => {
+    const c = line.trim().split(/\s+/);
+    return {
+      WDIR: parseFloat(c[5]),
+      WSPD: parseFloat(c[6]),
+      GST:  parseFloat(c[7]),
+      ATMP: parseFloat(c[13]),
+      WTMP: parseFloat(c[14])
+    };
+  });
 
-  const rows = lines
-    .filter(l => !l.startsWith("#"))
-    .map(line => {
-      const c = line.trim().split(/\s+/);
-      const get = i => (i >= 0 && i < c.length ? parseFloat(c[i]) : null);
-      return {
-        WDIR: get(idx.WDIR),
-        WSPD: get(idx.WSPD),
-        GST:  get(idx.GST),
-        ATMP: get(idx.ATMP),
-        WTMP: get(idx.WTMP)
-      };
-    });
-
-  const newest = fn => {
+  const fallback = fn => {
     for (const r of rows) {
       const v = fn(r);
-      if (v != null && !isNaN(v)) return v;
+      if (!isNaN(v)) return v;
     }
     return null;
   };
 
-  const airC   = newest(r => r.ATMP);
-  const waterC = newest(r => r.WTMP);
-  const wspd   = newest(r => r.WSPD);
-  const gust   = newest(r => r.GST);
-  const wdir   = newest(r => r.WDIR);
+  const CtoF = c => c * 9/5 + 32;
+  const mpsToKts = m => m * 1.94384;
+
+  const airC   = fallback(r => r.ATMP);
+  const waterC = fallback(r => r.WTMP);
+  const wspd   = fallback(r => r.WSPD);
+  const gust   = fallback(r => r.GST);
+  const wdir   = fallback(r => r.WDIR);
 
   return {
-    airF:    airC   != null ? oneDec(CtoF(airC)) : null,
-    waterF:  waterC != null ? oneDec(CtoF(waterC)) : null,
-    windKts: wspd   != null ? oneDec(mpsToKts(wspd)) : null,
-    gustKts: gust   != null ? oneDec(mpsToKts(gust)) : null,
+    airF:    airC   != null ? round(CtoF(airC)) : null,
+    waterF:  waterC != null ? round(CtoF(waterC)) : null,
+    windKts: wspd   != null ? round(mpsToKts(wspd)) : null,
+    gustKts: gust   != null ? round(mpsToKts(gust)) : null,
     windDirCardinal: degToCardinal(wdir)
   };
 }
+
+function round(n) { return Math.round(n * 10) / 10; }
 
 function degToCardinal(d) {
   if (d == null) return "--";
@@ -153,153 +136,106 @@ function degToCardinal(d) {
   return dirs[Math.floor((d % 360) / 22.5 + 0.5) % 16];
 }
 
-// ======================================================================
-// TIDES
-// ======================================================================
-async function safeTides() {
-  try { return await fetchTides(); }
-  catch { return { low: null, high: null }; }
-}
-
-async function fetchTides() {
-  const r = await fetch(
-    `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions` +
-    `&station=8779750&interval=hilo&units=english&datum=MLLW&time_zone=lst_ldt&format=json`
-  );
-
-  const j = await r.json();
-
-  return {
-    low:  j.predictions.find(p => p.type === "L") ?? null,
-    high: j.predictions.find(p => p.type === "H") ?? null
-  };
-}
 
 // ======================================================================
-// STORMGLASS — 48h forecast, cached 12 hours
+//  WAVES (StormGlass) — 12 HOUR CACHE
 // ======================================================================
-async function getStormglassWaves() {
-  // load cache if exists
-  if (fs.existsSync(CACHE_PATH)) {
-    const cache = JSON.parse(fs.readFileSync(CACHE_PATH, "utf8"));
-    const ageMs = Date.now() - cache.timestamp;
+async function getWavesCached() {
+  const cached = await store.get("waves.json", { type: "json" });
 
-    // 12-hour cache
-    if (ageMs < 12 * 60 * 60 * 1000) {
-      return getClosestWave(cache.hours);
-    }
+  // 12 hours
+  if (cached && Date.now() - cached.timestamp < 12 * 60 * 60 * 1000) {
+    return cached.waves;
   }
 
-  // fetch fresh data
-  const hours = await fetchStormglassHours();
+  const waves = await fetchStormglass();
 
-  // save cache
-  fs.writeFileSync(
-    CACHE_PATH,
-    JSON.stringify({ timestamp: Date.now(), hours })
-  );
+  await store.setJSON("waves.json", {
+    timestamp: Date.now(),
+    waves
+  });
 
-  return getClosestWave(hours);
+  return waves;
 }
 
-async function fetchStormglassHours() {
+async function fetchStormglass() {
   try {
-    const url =
-      `https://api.stormglass.io/v2/weather/point?lat=${WAVES_LAT}&lng=${WAVES_LON}` +
-      `&params=waveHeight&source=sg`;
+    const url = `https://api.stormglass.io/v2/weather/point?lat=${WAVES_LAT}&lng=${WAVES_LON}&params=waveHeight&source=sg`;
 
     const resp = await fetch(url, {
-      headers: { Authorization: STORMGLASS_KEY }
+      headers: { "Authorization": STORMGLASS_KEY }
     });
 
-    if (!resp.ok) return [];
+    if (!resp.ok) return { waveM:null, waveFt:null };
 
     const data = await resp.json();
-    return data.hours || [];
+    if (!data.hours?.length) return { waveM:null, waveFt:null };
 
-  } catch (e) {
-    return [];
-  }
-}
+    // closest hour to now
+    let closest = data.hours[0];
+    let best = 999999999;
+    const now = Date.now();
 
-function getClosestWave(hours) {
-  if (!hours || hours.length === 0)
-    return { waveM: null, waveFt: null };
-
-  let best = Infinity;
-  let closest = hours[0];
-  const now = Date.now();
-
-  for (const h of hours) {
-    const t = new Date(h.time).getTime();
-    const diff = Math.abs(t - now);
-    if (diff < best) {
-      best = diff;
-      closest = h;
+    for (const h of data.hours) {
+      const t = new Date(h.time).getTime();
+      const diff = Math.abs(t - now);
+      if (diff < best) {
+        best = diff;
+        closest = h;
+      }
     }
+
+    const m = closest.waveHeight?.sg ?? null;
+    return {
+      waveM:  m,
+      waveFt: m != null ? round(m * 3.28084) : null
+    };
+
+  } catch {
+    return { waveM:null, waveFt:null };
   }
-
-  const m = closest.waveHeight?.sg ?? null;
-
-  return {
-    waveM: m,
-    waveFt: m != null ? oneDec(m * 3.28084) : null
-  };
 }
 
+
 // ======================================================================
-// SUNRISE / SUNSET — NOAA SPA
+//  USHARBORS PDF — TIDES + SUNRISE/SUNSET
 // ======================================================================
-function computeSunriseSunset(lat, lon, date) {
-  const rad = d => d * Math.PI/180;
+async function fetchUsharborsTidesSun() {
 
-  const N = Math.floor((date - new Date(date.getFullYear(),0,0)) / 86400000);
-  const lngHour = lon / 15;
-  const t = N + ((6 - lngHour) / 24);
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm   = String(today.getMonth()+1).padStart(2,"0");
 
-  const M = (0.9856 * t) - 3.289;
-  let L = M + 1.916*Math.sin(rad(M)) + 0.020*Math.sin(rad(2*M)) + 282.634;
-  L = (L + 360) % 360;
+  const pdfUrl =
+    `https://www.usharbors.com/harbor/texas/padre-island-tx/pdf/?tide=${yyyy}-${mm}`;
 
-  let RA = Math.atan(0.91764 * Math.tan(rad(L))) * 180/Math.PI;
-  RA = (RA + 360) % 360;
+  const resp = await fetch(pdfUrl);
+  if (!resp.ok) throw new Error("USHarbors PDF fetch failed");
 
-  const Lq = Math.floor(L/90) * 90;
-  const RAq = Math.floor(RA/90) * 90;
-  RA = (RA + (Lq - RAq)) / 15;
+  const buf = await resp.arrayBuffer();
+  const parsed = await pdf(Buffer.from(buf));
 
-  const sinDec = 0.39782 * Math.sin(rad(L));
-  const cosDec = Math.cos(Math.asin(sinDec));
+  const text = parsed.text;
 
-  const cosH =
-    (Math.cos(rad(90.833)) - (sinDec * Math.sin(rad(lat)))) /
-    (cosDec * Math.cos(rad(lat)));
+  // PDF format puts each day like:
+  // "1 High 2.1ft 01:44 AM  Low 0.3ft 11:02 AM  Sunrise 07:03 AM  Sunset 05:47 PM"
+  // We extract by matching today's date at line start.
 
-  if (cosH > 1) return { sunrise: null, sunset: null };
-  if (cosH < -1) return { sunrise: null, sunset: null };
+  const day = today.getDate();
+  const regex = new RegExp(`\\b${day}\\b[\\s\\S]*?(?=\\n|$)`, "i");
+  const line = text.match(regex)?.[0] ?? "";
 
-  const Hrise = (360 - Math.acos(cosH)*180/Math.PI) / 15;
-  const Hset  = (Math.acos(cosH)*180/Math.PI) / 15;
+  const high = [...line.matchAll(/High\s+([\d.]+)ft\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/gi)]
+    .map(m => `${m[1]} ft ${m[2]}`);
 
-  const Trise = Hrise + RA - (0.06571*t) - 6.622;
-  const Tset  = Hset  + RA - (0.06571*t) - 6.622;
+  const low = [...line.matchAll(/Low\s+([\d.]+)ft\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/gi)]
+    .map(m => `${m[1]} ft ${m[2]}`);
+
+  const sunrise = line.match(/Sunrise\s+(\d{1,2}:\d{2}\s*(AM|PM))/i)?.[1] ?? null;
+  const sunset  = line.match(/Sunset\s+(\d{1,2}:\d{2}\s*(AM|PM))/i)?.[1] ?? null;
 
   return {
-    sunrise: toLocalTime(Trise, lngHour, date),
-    sunset:  toLocalTime(Tset, lngHour, date)
+    tides: { high, low },
+    sun: { sunrise, sunset }
   };
-}
-
-function toLocalTime(T, lngHour, date) {
-  const hoursUTC = T - lngHour;
-  let h = Math.floor(hoursUTC);
-  let m = Math.floor((hoursUTC - h) * 60);
-
-  if (h < 0) h += 24;
-  if (h >= 24) h -= 24;
-
-  const d = new Date(date);
-  d.setHours(h, m, 0, 0);
-
-  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
