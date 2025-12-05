@@ -1,4 +1,3 @@
-import fetch from "node-fetch";
 import pdf from "pdf-parse-es5";
 import { getStore } from "@netlify/blobs";
 
