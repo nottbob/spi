@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
+<meta charset="UTF-8">
 <title>SPI Marine Board</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
@@ -9,26 +9,23 @@
 :root {
   --bg:#020617;
   --text:#e5e7eb;
-  --border:#1f2937;
   --mono:"SF Mono",Menlo,Consolas,monospace;
   --alert-red:#7f1d1d;
   --alert-yellow:#facc15;
 }
 
-body {
+body{
   margin:0;
-  width:100vw;
-  height:100vh;
-  overflow:hidden;
-  background:radial-gradient(circle at top,#1e293b 0,#020617 55%);
+  background:#020617;
   color:var(--text);
   font-family:var(--mono);
   display:flex;
   justify-content:center;
   align-items:center;
+  height:100vh;
 }
 
-.board {
+.board{
   width:100%;
   height:100%;
   padding:4vh 4vw;
@@ -38,207 +35,132 @@ body {
   gap:5vh;
 }
 
-.title {
+.title{
   display:flex;
   justify-content:space-evenly;
-  align-items:center;
   font-size:clamp(2rem,4vw,4rem);
-  padding-left:3vw;
-  padding-right:3vw;
 }
 
-.grid {
+.grid{
   flex:1;
-  width:100%;
   display:grid;
   grid-template-columns:1fr 1fr 1fr 1fr;
-  row-gap:4vh;
-  column-gap:4vw;
+  gap:4vh 4vw;
   font-size:clamp(1.4rem,2.8vw,3.2rem);
 }
 
 .cell { white-space:nowrap; }
 
-.alert-red, .alert-yellow {
+.alert-red, .alert-yellow{
   padding:0.25em 0.4em;
   border-radius:6px;
-  width:100%;
-  display:inline-block;
   color:black !important;
 }
-.alert-red { background:var(--alert-red); }
-.alert-yellow { background:var(--alert-yellow); }
+.alert-red{ background:var(--alert-red); }
+.alert-yellow{ background:var(--alert-yellow); }
+
 </style>
 </head>
 
 <body>
 <div class="board">
+
   <div class="title">
     <div>WEATHER</div>
     <div id="updatedAt">LOADING…</div>
   </div>
 
   <div class="grid">
-    <div class="cell"></div>
-    <div class="cell">GULF</div>
-    <div class="cell">BAY</div>
-    <div class="cell">TIDES: <span id="tideDate"></span></div>
+    <div></div>
+    <div>GULF</div>
+    <div>BAY</div>
+    <div>TIDES: <span id="tideDate"></span></div>
 
-    <div class="cell"><span id="waterLabel">WATER</span></div>
-    <div class="cell"><span id="gulfWater">--</span></div>
-    <div class="cell"><span id="bayWater">--</span></div>
-    <div class="cell">LOW: <span id="tideLow">--</span></div>
+    <div><span id="waterLabel">WATER</span></div>
+    <div id="gulfWater">--</div>
+    <div id="bayWater">--</div>
+    <div>LOW: <span id="tideLow">--</span></div>
 
-    <div class="cell"><span id="airLabel">AIR</span></div>
-    <div class="cell"><span id="gulfAir">--</span></div>
-    <div class="cell"><span id="bayAir">--</span></div>
-    <div class="cell">HIGH: <span id="tideHigh">--</span></div>
+    <div><span id="airLabel">AIR</span></div>
+    <div id="gulfAir">--</div>
+    <div id="bayAir">--</div>
+    <div>HIGH: <span id="tideHigh">--</span></div>
 
-    <div class="cell"><span id="windLabel">WIND</span></div>
-    <div class="cell"><span id="gulfWind">--</span></div>
-    <div class="cell"><span id="bayWind">--</span></div>
-    <div class="cell">SUNRISE: <span id="sunrise">--</span></div>
+    <div><span id="windLabel">WIND</span></div>
+    <div id="gulfWind">--</div>
+    <div id="bayWind">--</div>
+    <div>SUNRISE: <span id="sunrise">--</span></div>
 
-    <div class="cell"><span id="seasLabel">SEAS</span></div>
-    <div class="cell"><span id="gulfSeas">--</span></div>
-    <div class="cell"><span id="baySeas">N/A</span></div>
-    <div class="cell">SUNSET: <span id="sunset">--</span></div>
+    <div><span id="seasLabel">SEAS</span></div>
+    <div id="gulfSeas">--</div>
+    <div id="baySeas">N/A</div>
+    <div>SUNSET: <span id="sunset">--</span></div>
   </div>
+
 </div>
 
 <script>
-const WORKER_URL="https://sta-spi.netlify.app/.netlify/functions/weather";
-
-let lastLiveUpdate=null;
+const WORKER_URL = "https://sta-spi.netlify.app/.netlify/functions/weather";
 
 function pad(n){ return String(n).padStart(2,"0"); }
 function toHM(d){ return pad(d.getHours())+":"+pad(d.getMinutes()); }
 
-/* Sunrise/sunset always local */
-function convertToLocal24(timeStr, forcePM=false){
-  if(!timeStr) return "--";
-  let [h,m] = timeStr.split(":").map(Number);
-  if(forcePM && h<12) h+=12;
-  return pad(h)+":"+pad(m);
+function renderTide(obj){
+  if (!obj) return "--";
+  return `${obj.time}  ${obj.v}ft`;
 }
 
-/* NEW — tides are simple HH:MM strings, no Date() */
-function formatTide(t){
-  if(!t) return "--";
-  return `${t.t}  ${t.v}ft`;  // VERY SIMPLE & ALWAYS CORRECT
+function render(w){
+  gulfWater.textContent = w.gulf.waterF+"°F";
+  bayWater.textContent  = w.bay.waterF +"°F";
+
+  gulfAir.textContent = w.gulf.airF+"°F";
+  bayAir.textContent  = w.bay.airF +"°F";
+
+  gulfWind.textContent = `${w.gulf.windKts}-${w.gulf.gustKts} kts ${w.gulf.windDirCardinal}`;
+  bayWind.textContent  = `${w.bay.windKts}-${w.bay.gustKts} kts ${w.bay.windDirCardinal}`;
+
+  gulfSeas.textContent = w.waves.waveFt != null ? w.waves.waveFt+" ft" : "--";
+
+  tideLow.textContent  = renderTide(w.tides.low);
+  tideHigh.textContent = renderTide(w.tides.high);
+
+  sunrise.textContent = w.sun.sunrise ?? "--";
+  sunset.textContent  = w.sun.sunset ?? "--";
+
+  updatedAt.textContent = "UPDATED " + toHM(new Date());
 }
 
-/* Alerts unchanged */
-function clearAlerts(){
-  document.querySelectorAll('.alert-red,.alert-yellow')
-    .forEach(el => el.classList.remove("alert-red","alert-yellow"));
-}
-function mark(id,cls){ document.getElementById(id).classList.add(cls); }
-
-function applyAlertLogic(w){
-  clearAlerts();
-  const gw=w.gulf.waterF, bw=w.bay.waterF;
-  const ga=w.gulf.airF,   ba=w.bay.airF;
-  const seas=w.waves.waveFt;
-
-  const waterLow=(gw<60||bw<60);
-  const airLow=(ga<60||ba<60);
-
-  if(waterLow){ mark("waterLabel","alert-red"); mark("gulfWater","alert-red"); mark("bayWater","alert-red"); }
-  if(airLow && !waterLow){ mark("airLabel","alert-yellow"); mark("gulfAir","alert-yellow"); mark("bayAir","alert-yellow"); }
-  if(airLow && waterLow){ mark("airLabel","alert-red"); mark("gulfAir","alert-red"); mark("bayAir","alert-red"); }
-
-  if(w.gulf.gustKts>=25||w.bay.gustKts>=25||w.gulf.windKts>=25||w.bay.windKts>=25){
-    mark("windLabel","alert-red");
-    mark("gulfWind","alert-red");
-    mark("bayWind","alert-red");
-  }
-
-  if(seas>=8){ mark("seasLabel","alert-red"); mark("gulfSeas","alert-red"); }
-  else if(seas>=6){ mark("seasLabel","alert-yellow"); mark("gulfSeas","alert-yellow"); }
+function updateDate(){
+  const now = new Date();
+  tideDate.textContent =
+    `${pad(now.getDate())} ` +
+    ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][now.getMonth()] +
+    ` ${String(now.getFullYear()).slice(2)}`;
 }
 
-/* Render */
-function renderLiveWeather(w){
-  gulfWater.textContent=w.gulf.waterF+"°F";
-  bayWater.textContent=w.bay.waterF+"°F";
-
-  gulfAir.textContent=w.gulf.airF+"°F";
-  bayAir.textContent=w.bay.airF+"°F";
-
-  gulfWind.textContent=`${w.gulf.windKts}-${w.gulf.gustKts} kts ${w.gulf.windDirCardinal}`;
-  bayWind.textContent =`${w.bay.windKts}-${w.bay.gustKts} kts ${w.bay.windDirCardinal}`;
-
-  gulfSeas.textContent=w.waves.waveFt!=null ? w.waves.waveFt+" ft" : "--";
-
-  sunrise.textContent=convertToLocal24(w.sun.sunrise,false);
-  sunset.textContent =convertToLocal24(w.sun.sunset,true);
-
-  tideLow.textContent =formatTide(w.tides.low);
-  tideHigh.textContent=formatTide(w.tides.high);
-
-  applyAlertLogic(w);
-
-  updatedAt.textContent="UPDATED "+toHM(lastLiveUpdate);
-  updatedAt.style.color="#e5e7eb";
-}
-
-/* Offline mode */
-function applyOfflineDisplay(){
-  const cached=localStorage.getItem("lastWeather");
-  const time=localStorage.getItem("lastWeatherTime");
-  if(!cached){
-    updatedAt.textContent="OFFLINE — NO CACHED DATA";
-    updatedAt.style.color="#facc15";
-    return;
-  }
-  renderLiveWeather(JSON.parse(cached));
-  updatedAt.style.color="#facc15";
-  updatedAt.textContent="OFFLINE — Last Live: "+(time??"UNKNOWN");
-}
-
-/* Fetch */
-function updateBoard(){
+function update(){
   fetch(WORKER_URL)
-    .then(r => { if(!r.ok) throw Error(); return r.json(); })
-    .then(w => {
-      lastLiveUpdate=new Date();
+    .then(r=>r.json())
+    .then(w=>{
+      render(w);
       localStorage.setItem("lastWeather",JSON.stringify(w));
-      localStorage.setItem("lastWeatherTime",toHM(lastLiveUpdate));
-      renderLiveWeather(w);
     })
-    .catch(()=>applyOfflineDisplay());
+    .catch(()=>{
+      const cached = localStorage.getItem("lastWeather");
+      if(cached) render(JSON.parse(cached));
+      updatedAt.textContent = "OFFLINE";
+    });
 
   updateDate();
 }
 
-function updateDate(){
-  const now=new Date();
-  tideDate.textContent=
-    `${pad(now.getDate())} ${["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][now.getMonth()]} ${String(now.getFullYear()).slice(2)}`;
+function start(){
+  update();
+  setInterval(update, 6*60*1000);
 }
 
-/* Sync every 6 mins */
-function syncTo6Min(){
-  const now=new Date();
-  const minute=now.getMinutes();
-  const next=Math.ceil(minute/6)*6;
-
-  const target=new Date(now);
-  target.setMinutes(next);
-  target.setSeconds(0);
-  target.setMilliseconds(0);
-
-  const ms=target-now;
-
-  setTimeout(()=>{
-    updateBoard();
-    setInterval(updateBoard,6*60*1000);
-  },ms);
-}
-
-updateBoard();
-syncTo6Min();
+start();
 </script>
 
 </body>
