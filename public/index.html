@@ -108,30 +108,38 @@ body {
 </div>
 
 <script>
+/* ===========================
+   PRODUCTION BACKEND URL
+   =========================== */
 const WORKER_URL="https://sta-spi.netlify.app/.netlify/functions/weather";
 
+/* UTIL */
 let lastLiveUpdate = null;
 
 function pad(n){ return String(n).padStart(2,"0"); }
 function toHM(d){ return pad(d.getHours())+":"+pad(d.getMinutes()); }
 
-function fix24(t){
-  if(!t) return "--";
-  const [h,m] = t.split(":").map(Number);
+/* Convert sunrise/sunset */
+function convertToLocal24(timeStr, forcePM=false){
+  if(!timeStr) return "--";
+  let [h, m] = timeStr.split(":").map(Number);
+  if(forcePM && h < 12) h += 12;
   return pad(h)+":"+pad(m);
 }
 
+/* Convert UTC tide timestamp -> LOCAL */
 function formatTide(t){
   if(!t) return "--";
-  const d=new Date(t.t);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}  ${t.v}ft`;
+  let d = new Date(t.t);                    // t.t is UTC
+  let local = new Date(d.getTime() + (d.getTimezoneOffset() * -60000));
+  return `${pad(local.getHours())}:${pad(local.getMinutes())}  ${t.v}ft`;
 }
 
+/* ALERTS */
 function clearAlerts(){
   document.querySelectorAll('.alert-red,.alert-yellow')
     .forEach(el => el.classList.remove("alert-red","alert-yellow"));
 }
-
 function mark(id,cls){
   document.getElementById(id).classList.add(cls);
 }
@@ -142,41 +150,42 @@ function applyAlertLogic(w){
   const ga=w.gulf.airF,   ba=w.bay.airF;
   const seas=w.waves.waveFt;
 
-  const waterLow = (gw<60 || bw<60);
-  const airLow   = (ga<60 || ba<60);
+  const waterLow=(gw<60||bw<60);
+  const airLow=(ga<60||ba<60);
 
   if(waterLow){
-      mark("waterLabel","alert-red");
-      mark("gulfWater","alert-red");
-      mark("bayWater","alert-red");
+    mark("waterLabel","alert-red");
+    mark("gulfWater","alert-red");
+    mark("bayWater","alert-red");
   }
   if(airLow && !waterLow){
-      mark("airLabel","alert-yellow");
-      mark("gulfAir","alert-yellow");
-      mark("bayAir","alert-yellow");
+    mark("airLabel","alert-yellow");
+    mark("gulfAir","alert-yellow");
+    mark("bayAir","alert-yellow");
   }
   if(airLow && waterLow){
-      mark("airLabel","alert-red");
-      mark("gulfAir","alert-red");
-      mark("bayAir","alert-red");
+    mark("airLabel","alert-red");
+    mark("gulfAir","alert-red");
+    mark("bayAir","alert-red");
   }
 
-  if(w.gulf.gustKts>=25 || w.bay.gustKts>=25 ||
-     w.gulf.windKts>=25 || w.bay.windKts>=25){
-      mark("windLabel","alert-red");
-      mark("gulfWind","alert-red");
-      mark("bayWind","alert-red");
+  if(w.gulf.gustKts>=25||w.bay.gustKts>=25||
+     w.gulf.windKts>=25||w.bay.windKts>=25){
+    mark("windLabel","alert-red");
+    mark("gulfWind","alert-red");
+    mark("bayWind","alert-red");
   }
 
   if(seas>=8){
-      mark("seasLabel","alert-red");
-      mark("gulfSeas","alert-red");
+    mark("seasLabel","alert-red");
+    mark("gulfSeas","alert-red");
   } else if(seas>=6){
-      mark("seasLabel","alert-yellow");
-      mark("gulfSeas","alert-yellow");
+    mark("seasLabel","alert-yellow");
+    mark("gulfSeas","alert-yellow");
   }
 }
 
+/* RENDER */
 function renderLiveWeather(w){
   gulfWater.textContent = w.gulf.waterF+"°F";
   bayWater.textContent  = w.bay.waterF+"°F";
@@ -189,8 +198,8 @@ function renderLiveWeather(w){
 
   gulfSeas.textContent = w.waves.waveFt!=null ? w.waves.waveFt+" ft" : "--";
 
-  sunrise.textContent = fix24(w.sun.sunrise);
-  sunset.textContent  = fix24(w.sun.sunset);
+  sunrise.textContent = convertToLocal24(w.sun.sunrise, false);
+  sunset.textContent  = convertToLocal24(w.sun.sunset, true);  // always PM
 
   tideLow.textContent  = formatTide(w.tides.low);
   tideHigh.textContent = formatTide(w.tides.high);
@@ -201,20 +210,23 @@ function renderLiveWeather(w){
   updatedAt.textContent="UPDATED " + toHM(lastLiveUpdate);
 }
 
+/* OFFLINE */
 function applyOfflineDisplay(){
-  const cached = localStorage.getItem("lastWeather");
-  const time   = localStorage.getItem("lastWeatherTime");
+  const cached=localStorage.getItem("lastWeather");
+  const time=localStorage.getItem("lastWeatherTime");
 
   if(!cached){
-      updatedAt.textContent="OFFLINE — NO CACHED DATA";
-      updatedAt.style.color="#facc15";
-      return;
+    updatedAt.textContent="OFFLINE — NO CACHED DATA";
+    updatedAt.style.color="#facc15";
+    return;
   }
+
   renderLiveWeather(JSON.parse(cached));
   updatedAt.style.color="#facc15";
-  updatedAt.textContent="OFFLINE — Last Live: "+(time ?? "UNKNOWN");
+  updatedAt.textContent="OFFLINE — Last Live: "+(time??"UNKNOWN");
 }
 
+/* MAIN FETCH */
 function updateBoard(){
   fetch(WORKER_URL)
     .then(r => { if(!r.ok) throw Error(); return r.json(); })
@@ -232,14 +244,11 @@ function updateBoard(){
 function updateDate(){
   const now=new Date();
   const dd=pad(now.getDate());
-  const mm=["JAN","FEB","MAR","APR","MAY","JUN",
-           "JUL","AUG","SEP","OCT","NOV","DEC"][now.getMonth()];
-  tideDate.textContent = `${dd} ${mm} ${String(now.getFullYear()).slice(2)}`;
+  const mm=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][now.getMonth()];
+  tideDate.textContent=`${dd} ${mm} ${String(now.getFullYear()).slice(2)}`;
 }
 
-/* ============================================================
-   NEW: SYNC UPDATES TO EXACT 6-MINUTE MARKS (00,06,12,...,54)
-   ============================================================ */
+/* SYNC TO 6-MINUTE MARKS */
 function syncTo6Min(){
   const now = new Date();
   const minute = now.getMinutes();
@@ -252,9 +261,9 @@ function syncTo6Min(){
 
   const ms = target - now;
 
-  setTimeout(() => {
+  setTimeout(()=>{
     updateBoard();
-    setInterval(updateBoard, 6 * 60 * 1000); // 360000 ms
+    setInterval(updateBoard, 6*60*1000); // 6 min
   }, ms);
 }
 
