@@ -1,108 +1,82 @@
-// functions/weather/weather.js
-//
-// *** COMMONJS VERSION ***
-// Works in Netlify Dev + Production (Node 18)
-// No import/export — uses require() + module.exports
-//
+// ======================================================================
+// SPI WEATHER BOARD — FULL SERVER FUNCTION
+// NOAA + Stormglass + USHarbors (TSV Parser)
+// ======================================================================
 
-const fetch = require("node-fetch");
-const { Buffer } = require("buffer");
-
-// ---------- ENV ----------
-const GITHUB_TOKEN  = process.env.GITHUB_TOKEN;
-const GITHUB_REPO   = process.env.GITHUB_REPO;
-const GITHUB_BRANCH = process.env.GITHUB_BRANCH;
+// ----------------------------------------------------------
+// ENV VARS
+// ----------------------------------------------------------
+const GITHUB_TOKEN   = process.env.GITHUB_TOKEN;
+const GITHUB_REPO    = process.env.GITHUB_REPO;      // "nottbob/wave-proxy"
+const GITHUB_BRANCH  = process.env.GITHUB_BRANCH;    // "main"
 const STORMGLASS_KEY = process.env.STORMGLASS_KEY;
 
-// ---------- CONSTANTS ----------
 const STORMGLASS_URL =
   "https://api.stormglass.io/v2/weather/point?lat=26.071389&lng=-97.128722&params=waveHeight&source=sg";
 
-const USHARBOR_BASE =
-  "https://www.usharbors.com/harbor/texas/padre-island-tx/pdf/";
 
-// ======================================================================
-//  GITHUB HELPERS
-// ======================================================================
-
+// ----------------------------------------------------------
+// GITHUB LOADER
+// ----------------------------------------------------------
 async function githubGet(path) {
-  if (!GITHUB_TOKEN || !GITHUB_REPO || !GITHUB_BRANCH) return null;
+  if (!GITHUB_TOKEN || !GITHUB_REPO || !GITHUB_BRANCH) {
+    console.log("[GitHub] Missing environment variables");
+    return null;
+  }
 
   const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/${path}?ref=${GITHUB_BRANCH}`;
+  console.log("[GitHub] GET:", url);
 
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${GITHUB_TOKEN}`,
       "User-Agent": "spi-weather-board",
-      Accept: "application/vnd.github+json",
-    },
+      Accept: "application/vnd.github+json"
+    }
   });
 
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    console.log("[GitHub] File not found:", path);
+    return null;
+  }
+
   if (!res.ok) throw new Error(`GitHub GET failed: ${res.status}`);
 
   const json = await res.json();
-  const content = Buffer.from(json.content, "base64").toString("utf8");
-  return { sha: json.sha, content };
+  const txt  = Buffer.from(json.content, "base64").toString("utf8");
+
+  return { sha: json.sha, content: txt };
 }
 
-async function githubWrite(path, text, sha = null) {
-  if (!GITHUB_TOKEN || !GITHUB_REPO || !GITHUB_BRANCH) return null;
 
-  const body = {
-    message: `update ${path}`,
-    content: Buffer.from(text, "utf8").toString("base64"),
-    branch: GITHUB_BRANCH,
-  };
-  if (sha) body.sha = sha;
-
-  const url = `https://api.github.com/repos/${GITHUB_REPO}/contents/${path}`;
-
-  const res = await fetch(url, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      "User-Agent": "spi-weather-board",
-      Accept: "application/vnd.github+json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) throw new Error(`GitHub WRITE failed: ${res.status}`);
-  return await res.json();
-}
 
 // ======================================================================
-//  WAVES — StormGlass (update only at noon/midnight)
+// STORMGLASS — DAILY/NOON REFRESH
 // ======================================================================
-
 function shouldUpdateStormglass(lastTimestamp) {
   if (!lastTimestamp) return true;
-
   const last = new Date(lastTimestamp);
-  const now = new Date();
+  const now  = new Date();
 
-  return (
-    now.getDate() !== last.getDate() || // crossed midnight
-    (last.getHours() < 12 && now.getHours() >= 12) // crossed noon
-  );
+  const crossedMidnight = now.getDate() !== last.getDate();
+  const crossedNoon     = last.getHours() < 12 && now.getHours() >= 12;
+
+  return crossedMidnight || crossedNoon;
 }
 
 async function fetchStormglassFresh() {
   const res = await fetch(STORMGLASS_URL, {
-    headers: { Authorization: STORMGLASS_KEY },
+    headers: { Authorization: STORMGLASS_KEY }
   });
 
-  if (!res.ok) throw new Error("StormGlass fetch failed");
+  if (!res.ok) throw new Error("Stormglass fetch failed");
 
   const json = await res.json();
-  if (!json.hours) throw new Error("Malformed StormGlass hours");
 
   const waves = json.hours.map(h => {
     const m = h.waveHeight?.sg;
-    const ft = typeof m === "number"
-      ? Math.round(m * 3.28084 * 10) / 10
-      : null;
+    const ft =
+      typeof m === "number" ? Math.round(m * 3.28084 * 10) / 10 : null;
     return { time: h.time, waveFt: ft };
   });
 
@@ -111,188 +85,184 @@ async function fetchStormglassFresh() {
 
 async function getStormglassForecast() {
   const file = await githubGet("stormglass.json");
-
   let stored = null;
+
   if (file) {
     try { stored = JSON.parse(file.content); } catch {}
   }
 
   if (!stored || shouldUpdateStormglass(stored.timestamp)) {
-    const fresh = await fetchStormglassFresh();
-    await githubWrite("stormglass.json", JSON.stringify(fresh, null, 2), file?.sha || null);
-    return fresh;
+    console.log("[Stormglass] Fetching fresh data");
+    return await fetchStormglassFresh();
   }
 
   return stored;
 }
 
-function pickCurrentWave(forecast) {
-  if (!forecast || !forecast.waves?.length) return { waveFt: null };
+function pickCurrentWave(f) {
+  if (!f || !f.waves || !f.waves.length) return { waveFt: null };
 
   const now = Date.now();
   let best = null;
-  let bestDiff = Infinity;
+  let diff = Infinity;
 
-  for (const w of forecast.waves) {
+  for (const w of f.waves) {
     if (w.waveFt == null) continue;
-    const diff = Math.abs(new Date(w.time).getTime() - now);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      best = w;
-    }
+    const t = new Date(w.time).getTime();
+    const d = Math.abs(t - now);
+    if (d < diff) { diff = d; best = w; }
   }
 
-  return { waveFt: best ? best.waveFt : null };
+  return best ? { waveFt: best.waveFt } : { waveFt: null };
 }
 
+
+
 // ======================================================================
-//  USHARBORS (text mode PDF → tide/sun)
+// USHARBORS — TSV PARSER (REQUIRES .tsv FILE IN GITHUB)
 // ======================================================================
+function parseUsharborsTSV(tsv) {
+  console.log("[USHarbors] Parsing TSV…");
 
-async function fetchUsharborsText(year, month) {
-  const mm = String(month).padStart(2, "0");
-  const url = `${USHARBOR_BASE}?tide=${year}-${mm}&text=1`;
-
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      Accept: "text/plain,*/*",
-      Referer: "https://www.usharbors.com/",
-    },
-  });
-
-  if (!res.ok) throw new Error("USHarbors text fetch failed");
-  return await res.text();
-}
-
-function parseUsharborsTextToMonth(text, year, month) {
-  const lines = text.split(/\r?\n/);
+  const lines = tsv.split(/\r?\n/).map(l => l.trim());
   const days = {};
 
-  const timeRegex = /^\d{1,2}:\d{2}$/;
-  const numRegex  = /^-?\d+(\.\d+)?$/;
-
-  for (let line of lines) {
-    line = line.trim();
+  for (const line of lines) {
     if (!line) continue;
 
-    const parts = line.split(/\s+/);
-    const day = parseInt(parts[0], 10);
-    if (!day || day < 1 || day > 31) continue;
+    const cols = line.split("\t");
 
-    let i = 2;
+    // Must start with numeric day
+    const day = parseInt(cols[0], 10);
+    if (!Number.isInteger(day)) continue;
+
+    // Expected column mapping:
+    // 0 Day
+    // 1 DOW
+    // 2 High AM Time
+    // 3 High AM Ft
+    // 4 High PM Time
+    // 5 High PM Ft
+    // 6 Low AM Time
+    // 7 Low AM Ft
+    // 8 Low PM Time
+    // 9 Low PM Ft
+    // 10 Sunrise
+    // 11 Sunset
+
+    const [
+      _day,
+      _dow,
+      highAMt, highAMv,
+      highPMt, highPMv,
+      lowAMt, lowAMv,
+      lowPMt, lowPMv,
+      sunrise, sunset
+    ] = cols;
+
     const rec = { high: [], low: [], sunrise: null, sunset: null };
 
-    // High AM
-    if (timeRegex.test(parts[i]) && numRegex.test(parts[i+1])) {
-      rec.high.push({ time: parts[i], ft: parseFloat(parts[i+1]) });
-      i += 2;
-    }
-    // High PM
-    if (timeRegex.test(parts[i]) && numRegex.test(parts[i+1])) {
-      rec.high.push({ time: parts[i], ft: parseFloat(parts[i+1]) });
-      i += 2;
-    }
-    // Low AM
-    if (timeRegex.test(parts[i]) && numRegex.test(parts[i+1])) {
-      rec.low.push({ time: parts[i], ft: parseFloat(parts[i+1]) });
-      i += 2;
-    }
-    // Low PM
-    if (timeRegex.test(parts[i]) && numRegex.test(parts[i+1])) {
-      rec.low.push({ time: parts[i], ft: parseFloat(parts[i+1]) });
-      i += 2;
-    }
-    // Sunrise
-    if (timeRegex.test(parts[i])) rec.sunrise = parts[i++];
-    // Sunset
-    if (timeRegex.test(parts[i])) rec.sunset = parts[i++];
+    const validTime = t => /^\d{1,2}:\d{2}$/.test(t);
+    const validNum  = v => /^-?\d+(\.\d+)?$/.test(v);
+
+    if (validTime(highAMt) && validNum(highAMv))
+      rec.high.push({ time: highAMt, ft: parseFloat(highAMv) });
+
+    if (validTime(highPMt) && validNum(highPMv))
+      rec.high.push({ time: highPMt, ft: parseFloat(highPMv) });
+
+    if (validTime(lowAMt) && validNum(lowAMv))
+      rec.low.push({ time: lowAMt, ft: parseFloat(lowAMv) });
+
+    if (validTime(lowPMt) && validNum(lowPMv))
+      rec.low.push({ time: lowPMt, ft: parseFloat(lowPMv) });
+
+    rec.sunrise = validTime(sunrise) ? sunrise : null;
+    rec.sunset  = validTime(sunset)  ? sunset  : null;
 
     days[day] = rec;
   }
 
-  return { year, month, days };
+  console.log("[USHarbors] Parsed", Object.keys(days).length, "days");
+  return days;
 }
 
-async function getUsharborsMonth() {
-  const now   = new Date();
-  const year  = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const fname = `usharbors-${year}-${String(month).padStart(2,"0")}.json`;
+function chooseTideTSV(rec, kind) {
+  const arr = rec[kind];
+  if (!arr || arr.length === 0) return null;
+  if (arr.length === 1) return arr[0];
 
-  const cached = await githubGet(fname);
-  if (cached) {
-    try { return JSON.parse(cached.content); } catch {}
-  }
-
-  const txt = await fetchUsharborsText(year, month);
-  const parsed = parseUsharborsTextToMonth(txt, year, month);
-  await githubWrite(fname, JSON.stringify(parsed, null, 2), cached?.sha || null);
-
-  return parsed;
-}
-
-function chooseTideForNow(dayRecord, kind) {
-  const list = dayRecord?.[kind];
-  if (!list?.length) return null;
-
-  const hour = new Date().getHours();
-  return hour < 12 ? list[0] : (list[1] ?? list[0]);
-}
-
-function buildTodayTidesAndSun(monthData) {
   const now = new Date();
-  const day = now.getDate();
+  const pm = now.getHours() >= 12;
+  return pm ? arr[1] : arr[0];
+}
 
-  const rec = monthData?.days?.[day];
-  if (!rec) {
+async function getUsharborsToday() {
+  const now = new Date();
+  const y  = now.getFullYear();
+  const m  = now.getMonth() + 1;
+  const mm = String(m).padStart(2, "0");
+
+  const filename = `usharbors-${y}-${mm}.tsv`;
+  console.log("[USHarbors] Loading:", filename);
+
+  const file = await githubGet(filename);
+
+  if (!file) {
     return {
-      tides: { low: null, high: null },
-      sun: { sunrise: null, sunset: null },
+      outdated: true,
+      tides: { high: null, low: null },
+      sun: { sunrise: null, sunset: null }
     };
   }
 
-  const mkISO = t =>
-    t
-      ? new Date(
-          monthData.year,
-          monthData.month - 1,
-          day,
-          Number(t.time.split(":")[0]),
-          Number(t.time.split(":")[1])
-        ).toISOString()
-      : null;
+  const days = parseUsharborsTSV(file.content);
+  const rec  = days[now.getDate()];
 
-  const high = chooseTideForNow(rec, "high");
-  const low  = chooseTideForNow(rec, "low");
+  if (!rec) {
+    return {
+      outdated: false,
+      tides: { high: null, low: null },
+      sun: { sunrise: null, sunset: null }
+    };
+  }
+
+  const high = chooseTideTSV(rec, "high");
+  const low  = chooseTideTSV(rec, "low");
+
+  const mkISO = t => {
+    if (!t) return null;
+    const [H, M] = t.time.split(":").map(Number);
+    return new Date(y, m - 1, now.getDate(), H, M).toISOString();
+  };
 
   return {
+    outdated: false,
     tides: {
       high: high ? { t: mkISO(high), v: high.ft } : null,
-      low:  low  ? { t: mkISO(low),  v: low.ft }  : null,
+      low:  low  ? { t: mkISO(low),  v: low.ft  } : null
     },
     sun: {
-      sunrise: rec.sunrise ?? null,
-      sunset:  rec.sunset ?? null,
-    },
+      sunrise: rec.sunrise,
+      sunset:  rec.sunset
+    }
   };
 }
 
-// ======================================================================
-//  BUOYS (fallback logic)
-// ======================================================================
 
+
+// ======================================================================
+// NOAA BUOYS
+// ======================================================================
 function cToF(c) { return (c * 9) / 5 + 32; }
-function mpsToKts(m){ return m * 1.94384; }
+function mpsToKts(m) { return m * 1.94384; }
 
 function parseNum(x) {
-  if (x == null || x === "--") return null;
   const n = parseFloat(x);
-  return Number.isNaN(n) ? null : n;
+  return isNaN(n) ? null : n;
 }
 
-function degToCardinal(d) {
-  if (d == null) return "--";
+function degToCard(d) {
   const dirs = [
     "N","NNE","NE","ENE","E","ESE","SE","SSE",
     "S","SSW","SW","WSW","W","WNW","NW","NNW"
@@ -302,105 +272,114 @@ function degToCardinal(d) {
 
 async function fetchBuoy(id) {
   const url = `https://www.ndbc.noaa.gov/data/realtime2/${id}.txt`;
+
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Buoy fetch failed ${id}`);
+  if (!res.ok) throw new Error("Buoy fetch failed");
 
-  const lines = (await res.text())
-    .split(/\r?\n/)
-    .filter(l => l.trim() && !l.startsWith("#"));
+  const raw = await res.text();
+  const lines = raw.split(/\r?\n/).filter(Boolean);
 
-  const rows = lines.map(l => l.trim().split(/\s+/));
-  const header = rows[0];
-  const dataRows = rows.slice(1);
+  const headerLine = lines.find(l => l.startsWith("#"));
+  if (!headerLine) throw new Error("Missing header");
 
+  const header = headerLine.replace(/^#\s*/, "").split(/\s+/);
+
+  const getIdx = (f) => header.indexOf(f);
   const idx = {
-    WDIR: header.indexOf("WDIR"),
-    WSPD: header.indexOf("WSPD"),
-    GST:  header.indexOf("GST"),
-    ATMP: header.indexOf("ATMP"),
-    WTMP: header.indexOf("WTMP"),
+    WDIR: getIdx("WDIR"),
+    WSPD: getIdx("WSPD"),
+    GST:  getIdx("GST"),
+    ATMP: getIdx("ATMP"),
+    WTMP: getIdx("WTMP")
   };
 
-  let airC = null, waterC = null, wspd = null, gust = null, wdir = null;
-  for (const r of dataRows) {
-    if (airC   == null && idx.ATMP !== -1) airC   = parseNum(r[idx.ATMP]);
-    if (waterC == null && idx.WTMP !== -1) waterC = parseNum(r[idx.WTMP]);
-    if (wspd   == null && idx.WSPD !== -1) wspd   = parseNum(r[idx.WSPD]);
-    if (gust   == null && idx.GST  !== -1) gust   = parseNum(r[idx.GST]);
-    if (wdir   == null && idx.WDIR !== -1) wdir   = parseNum(r[idx.WDIR]);
+  const data = lines.filter(l => !l.startsWith("#")).map(l => l.split(/\s+/));
 
-    if (airC!=null && waterC!=null && wspd!=null && gust!=null && wdir!=null)
-      break;
+  let air=null, water=null, wspd=null, gust=null, wdir=null;
+
+  for (const r of data) {
+    if (air   == null && idx.ATMP !== -1) air   = parseNum(r[idx.ATMP]);
+    if (water == null && idx.WTMP !== -1) water = parseNum(r[idx.WTMP]);
+    if (wspd  == null && idx.WSPD !== -1) wspd  = parseNum(r[idx.WSPD]);
+    if (gust  == null && idx.GST  !== -1) gust  = parseNum(r[idx.GST]);
+    if (wdir  == null && idx.WDIR !== -1) {
+      const d = parseNum(r[idx.WDIR]);
+      if (d != null) wdir = d;
+    }
+
+    if (air && water && wspd && gust && wdir) break;
   }
 
   return {
-    airF:  airC   != null ? Math.round(cToF(airC)   * 10) / 10 : null,
-    waterF:waterC!= null ? Math.round(cToF(waterC) * 10) / 10 : null,
-    windKts:wspd != null ? Math.round(mpsToKts(wspd) * 10) / 10 : null,
-    gustKts:gust != null ? Math.round(mpsToKts(gust) * 10) / 10 : null,
-    windDirCardinal: wdir != null ? degToCardinal(wdir) : "--",
+    airF:    air   != null ? Math.round(cToF(air)   * 10) / 10 : null,
+    waterF:  water != null ? Math.round(cToF(water) * 10) / 10 : null,
+    windKts: wspd  != null ? Math.round(mpsToKts(wspd) * 10) / 10 : null,
+    gustKts: gust  != null ? Math.round(mpsToKts(gust) * 10) / 10 : null,
+    windDirCardinal: wdir != null ? degToCard(wdir) : "--"
   };
 }
 
-async function safeFetchBuoy(id) {
-  try {
-    return await fetchBuoy(id);
-  } catch (e) {
-    console.error("Buoy error", id, e.message);
+async function safeBuoy(id) {
+  try { return await fetchBuoy(id); }
+  catch {
     return {
-      airF: null, waterF: null,
-      windKts: null, gustKts: null,
-      windDirCardinal: "--",
+      airF:null, waterF:null, windKts:null,
+      gustKts:null, windDirCardinal:"--"
     };
   }
 }
 
-// ======================================================================
-//  NETLIFY HANDLER (CommonJS)
-// ======================================================================
 
-module.exports.handler = async () => {
+
+// ======================================================================
+// MAIN HANDLER
+// ======================================================================
+exports.handler = async () => {
+  console.log("=== WEATHER HANDLER START ===");
+
   try {
-    const [gulf, bay, sgForecast, monthData] = await Promise.all([
-      safeFetchBuoy("BZST2"),
-      safeFetchBuoy("PCGT2"),
-      getStormglassForecast().catch(e => (console.error("Stormglass", e), null)),
-      getUsharborsMonth().catch(e => (console.error("USHarbors", e), null)),
+    const [gulf, bay, sg, ush] = await Promise.all([
+      safeBuoy("BZST2"),
+      safeBuoy("PCGT2"),
+      getStormglassForecast(),
+      getUsharborsToday()
     ]);
 
-    const wave = pickCurrentWave(sgForecast);
-    const { tides, sun } = buildTodayTidesAndSun(monthData);
+    const wave = pickCurrentWave(sg);
 
     return {
       statusCode: 200,
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         gulf,
         bay,
         waves: wave,
-        tides,
-        sun,
-      }),
+        tides: ush.tides,
+        sun: ush.sun,
+        usharborsOutdated: ush.outdated
+      })
     };
+
   } catch (err) {
-    console.error("WEATHER FATAL:", err);
+    console.error("FATAL WEATHER ERROR:", err);
     return {
       statusCode: 200,
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         error: String(err),
-        gulf: null,
-        bay: null,
-        waves: { waveFt: null },
-        tides: { low: null, high: null },
-        sun: { sunrise: null, sunset: null },
-      }),
+        gulf:null,
+        bay:null,
+        waves:{ waveFt:null },
+        tides:{ high:null, low:null },
+        sun:{ sunrise:null, sunset:null },
+        usharborsOutdated:true
+      })
     };
   }
 };
