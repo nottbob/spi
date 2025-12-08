@@ -6,7 +6,6 @@
   functions = "functions"
   publish = "public"
 
-# Optional but recommended: make sure environment vars exist
 [build.environment]
   GITHUB_TOKEN = ""
   GITHUB_REPO = ""
@@ -17,14 +16,12 @@
 # REDIRECTS
 ###############################################
 
-# Weather API endpoint
 [[redirects]]
   from = "/weather"
   to = "/.netlify/functions/weather"
   status = 200
   force = true
 
-# Wave updater endpoint (manual test only)
 [[redirects]]
   from = "/waveUpdater"
   to = "/.netlify/functions/waveUpdater"
@@ -32,26 +29,25 @@
   force = true
 
 ###############################################
-# FUNCTIONS SETTINGS (timeouts)
+# FUNCTIONS ROOT CONFIG
 ###############################################
 
 [functions]
-
-  # These apply to ALL functions unless overridden below
   node_bundler = "esbuild"
   external_node_modules = ["node-fetch", "@octokit/rest"]
 
-# Override individual function timeouts
-[[functions]]
-  name = "waveUpdater"
-  timeout = 20
+###############################################
+# INDIVIDUAL FUNCTION SETTINGS
+###############################################
 
-[[functions]]
-  name = "weather"
+[functions.weather]
   timeout = 10
 
+[functions.waveUpdater]
+  timeout = 20
+
 ###############################################
-# PLUGINS (THIS FIXES YOUR BUILD)
+# PLUGINS
 ###############################################
 
 [[plugins]]
