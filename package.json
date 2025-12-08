@@ -1,7 +1,9 @@
-spi-main-3/
-  package.json   ← must exist
-  functions/
-    weather/
-    waveUpdater/
-  public/
-  netlify.toml
+{
+  "name": "spi-weatherboard",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "node-fetch": "^2.6.11",
+    "@octokit/rest": "^20.0.0"
+  }
+}
