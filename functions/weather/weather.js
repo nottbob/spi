@@ -1,117 +1,153 @@
 // functions/weather/weather.js
+// MUST BE CommonJS for Netlify Dev
 
-export default async (event, context) => {
-  try {
-    const NOAA_TIDE_STATION = "8779750";
-    const LAT = 26.07139, LON = -97.12872;
-    const TZ = "America/Chicago";
+const fs = require("fs");
 
-    const toLocal = (d) =>
-      new Date(d.toLocaleString("en-US", { timeZone: TZ }));
+// -----------------------------
+// CONSTANTS
+// -----------------------------
+const NOAA_TIDE_STATION = "8779750";
+const LAT = 26.07139, LON = -97.12872;
 
-    const toHM = (d) => {
-      const hh = d.getHours().toString().padStart(2, "0");
-      const mm = d.getMinutes().toString().padStart(2, "0");
-      return `${hh}:${mm}`;
-    };
+// Gulf = BZST2, Bay = PCGT2
+const GULF = "BZST2";
+const BAY  = "PCGT2";
 
-    // -------------------------------------------------------------
-    // NOAA BUOY PARSER
-    // -------------------------------------------------------------
-    async function parseBuoy(station) {
-      try {
-        const url = `https://www.ndbc.noaa.gov/data/realtime2/${station}.txt`;
-        const raw = await fetch(url).then(r => r.text());
+// -----------------------------
+// UTIL FUNCTIONS
+// -----------------------------
+const toLocal = (d) =>
+  new Date(d.toLocaleString("en-US", { timeZone: "America/Chicago" }));
 
-        const lines = raw.trim().split("\n");
-        const header = lines.find(l => l.startsWith("#"))
-          .replace(/^#\s*/, "")
-          .split(/\s+/);
+const toHM = (d) => {
+  const h = d.getHours().toString().padStart(2, "0");
+  const m = d.getMinutes().toString().padStart(2, "0");
+  return `${h}:${m}`;
+};
 
-        const getIdx = (f) => header.indexOf(f);
+const oneDec = n => (n == null ? null : Number(n.toFixed(1)));
+const CtoF = c => (c * 9) / 5 + 32;
+const mpsToKts = v => v * 1.94384;
 
-        const idx = {
-          WDIR: getIdx("WDIR"),
-          WSPD: getIdx("WSPD"),
-          GST:  getIdx("GST"),
-          ATMP: getIdx("ATMP"),
-          WTMP: getIdx("WTMP")
-        };
+// Convert degree → cardinal
+function degToCardinal(d) {
+  if (d == null) return "--";
+  const dirs = [
+    "N","NNE","NE","ENE","E","ESE","SE","SSE",
+    "S","SSW","SW","WSW","W","WNW","NW","NNW"
+  ];
+  return dirs[Math.floor((d % 360) / 22.5 + 0.5) % 16];
+}
 
-        const rows = lines.filter(l => !l.startsWith("#"));
-        const cToF = c => (parseFloat(c) * 9/5 + 32);
+// -----------------------------
+// YOUR BUOY PARSER (EXACT COPY)
+// -----------------------------
+async function fetchBuoy(id) {
+  const r = await fetch(
+    `https://www.ndbc.noaa.gov/data/realtime2/${id}.txt`
+  );
+  const text = await r.text();
 
-        for (const row of rows) {
-          const col = row.trim().split(/\s+/);
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const headerLine = lines.find(l =>
+    l.startsWith("#") && l.includes("WDIR")
+  );
 
-          const wdir   = col[idx.WDIR];
-          const wspdMS = col[idx.WSPD];
-          const gstMS  = col[idx.GST];
-          const airC   = col[idx.ATMP];
-          const wtrC   = col[idx.WTMP];
+  const header = headerLine.replace("#", "").trim().split(/\s+/);
+  const col = n => header.indexOf(n);
+  const idx = {
+    WDIR: col("WDIR"),
+    WSPD: col("WSPD"),
+    GST:  col("GST"),
+    ATMP: col("ATMP"),
+    WTMP: col("WTMP")
+  };
 
-          return {
-            airF:   airC !== "MM" ? parseFloat(cToF(airC).toFixed(1)) : null,
-            waterF: wtrC !== "MM" ? parseFloat(cToF(wtrC).toFixed(1)) : null,
-            windKts: wspdMS !== "MM" ? parseFloat((parseFloat(wspdMS)*1.94384).toFixed(1)) : 0,
-            gustKts: gstMS  !== "MM" ? parseFloat((parseFloat(gstMS)*1.94384).toFixed(1))  : 0,
-            windDirCardinal: wdir !== "MM" ? wdir : "--"
-          };
-        }
+  const rows = lines
+    .filter(l => !l.startsWith("#"))
+    .map(line => {
+      const c = line.trim().split(/\s+/);
+      const get = i => (i >= 0 && i < c.length ? parseFloat(c[i]) : null);
+      return {
+        WDIR: get(idx.WDIR),
+        WSPD: get(idx.WSPD),
+        GST:  get(idx.GST),
+        ATMP: get(idx.ATMP),
+        WTMP: get(idx.WTMP)
+      };
+    });
 
-      } catch {
-        return { airF:null, waterF:null, windKts:0, gustKts:0, windDirCardinal:"--" };
-      }
+  const newest = fn => {
+    for (const r of rows) {
+      const v = fn(r);
+      if (v != null && !isNaN(v)) return v;
     }
+    return null;
+  };
 
-    const gulf = await parseBuoy("BZST2");
-    const bay  = await parseBuoy("PCGT2");
+  const airC   = newest(r => r.ATMP);
+  const waterC = newest(r => r.WTMP);
+  const wspd   = newest(r => r.WSPD);
+  const gust   = newest(r => r.GST);
+  const wdir   = newest(r => r.WDIR);
 
-    // -------------------------------------------------------------
-    // NOAA TIDES
-    // -------------------------------------------------------------
-    let tides = { high:null, low:null };
+  return {
+    airF: airC != null ? oneDec(CtoF(airC)) : null,
+    waterF: waterC != null ? oneDec(CtoF(waterC)) : null,
+    windKts: wspd != null ? oneDec(mpsToKts(wspd)) : null,
+    gustKts: gust != null ? oneDec(mpsToKts(gust)) : null,
+    windDirCardinal: degToCardinal(wdir)
+  };
+}
+
+// -----------------------------
+// MAIN HANDLER
+// -----------------------------
+module.exports.handler = async () => {
+  try {
+    // -------- BUOYS --------
+    const gulfBuoy = await fetchBuoy(GULF);
+    const bayBuoy  = await fetchBuoy(BAY);
+
+    // -------- TIDES --------
+    let tides = { high: null, low: null };
 
     try {
-      const tURL =
-        `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&station=${NOAA_TIDE_STATION}&date=today&interval=hilo&units=english&time_zone=gmt&datum=MLLW&format=json`;
+      const url =
+        `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?` +
+        `product=predictions&station=${NOAA_TIDE_STATION}` +
+        `&date=today&interval=hilo&units=english&time_zone=gmt&datum=MLLW&format=json`;
 
-      const t = await fetch(tURL).then(r => r.json());
+      const t = await fetch(url).then(r => r.json());
 
-      const H = t.predictions.find(x => x.type === "H");
-      const L = t.predictions.find(x => x.type === "L");
+      if (t.predictions) {
+        const H = t.predictions.find(p => p.type === "H");
+        const L = t.predictions.find(p => p.type === "L");
 
-      if (H) {
-        const d = toLocal(new Date(H.t));
-        tides.high = { t: toHM(d), v: parseFloat(H.v).toFixed(1) };
-      }
-      if (L) {
-        const d = toLocal(new Date(L.t));
-        tides.low = { t: toHM(d), v: parseFloat(L.v).toFixed(1) };
+        if (H) {
+          const d = toLocal(new Date(H.t));
+          tides.high = { t: toHM(d), v: parseFloat(H.v).toFixed(1) };
+        }
+        if (L) {
+          const d = toLocal(new Date(L.t));
+          tides.low = { t: toHM(d), v: parseFloat(L.v).toFixed(1) };
+        }
       }
     } catch {}
 
-    // -------------------------------------------------------------
-    // SUNRISE / SUNSET
-    // -------------------------------------------------------------
-    let sun = { sunrise:null, sunset:null };
-
+    // -------- SUN --------
+    let sun = { sunrise: null, sunset: null };
     try {
       const s = await fetch(
         `https://api.sunrise-sunset.org/json?lat=${LAT}&lng=${LON}&formatted=0`
       ).then(r => r.json());
 
-      const sr = toLocal(new Date(s.results.sunrise));
-      const ss = toLocal(new Date(s.results.sunset));
-
-      sun.sunrise = toHM(sr);
-      sun.sunset  = toHM(ss);
+      sun.sunrise = toHM(toLocal(new Date(s.results.sunrise)));
+      sun.sunset  = toHM(toLocal(new Date(s.results.sunset)));
     } catch {}
 
-    // -------------------------------------------------------------
-    // WAVES FROM GITHUB (NEVER STORMGLASS)
-    // -------------------------------------------------------------
-    let waves = { waveFt:null };
+    // -------- WAVES (from GitHub JSON) --------
+    let waves = { waveFt: null };
 
     try {
       const sg = await fetch(
@@ -120,40 +156,37 @@ export default async (event, context) => {
       ).then(r => r.json());
 
       const arr = sg.waves;
-      const now = toLocal(new Date());
-
+      const nowLocal = toLocal(new Date());
       let best = null;
+
       for (const w of arr) {
-        const t = toLocal(new Date(w.time));
-        if (t <= now) best = w;
+        const tLocal = toLocal(new Date(w.time));
+        if (tLocal <= nowLocal) best = w;
         else break;
       }
 
       if (best) waves.waveFt = parseFloat(best.waveFt).toFixed(1);
+
     } catch {}
 
-    // -------------------------------------------------------------
-    // RETURN A REAL NETLIFY RESPONSE OBJECT
-    // -------------------------------------------------------------
-    return new Response(
-      JSON.stringify({
-        gulf,
-        bay,
+    // -------- RETURN --------
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gulf: gulfBuoy,
+        bay: bayBuoy,
         waves,
         tides,
         sun,
         usharborsOutdated: false
-      }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      }
-    );
+      })
+    };
 
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.toString() }),
-      { status: 500 }
-    );
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: err.toString() })
+    };
   }
 };
