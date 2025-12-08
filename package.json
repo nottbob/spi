@@ -1,14 +1,7 @@
-{
-  "name": "spi-main-3",
-  "version": "1.0.0",
-  "description": "SPI Weatherboard",
-  "main": "index.js",
-  "type": "commonjs",
-  "scripts": {
-    "dev": "netlify dev",
-    "build": "echo \"No build step\""
-  },
-  "author": "",
-  "license": "ISC",
-  "dependencies": {}
-}
+spi-main-3/
+  package.json   ← must exist
+  functions/
+    weather/
+    waveUpdater/
+  public/
+  netlify.toml
